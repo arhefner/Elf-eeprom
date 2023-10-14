@@ -1,0 +1,7 @@
+.vscode
+*.prg
+*.build
+*.lst
+*.hex
+*.bin
+
