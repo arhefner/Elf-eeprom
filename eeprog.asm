@@ -39,6 +39,9 @@ main:       call  setbd
 
             sex   r2
 
+            call  inmsg
+            db    "Start send...",0
+
 xfer:       ghi   re                    ; save UART timing
             phi   r8
             ani   0feh                  ; turn off echo
@@ -50,14 +53,14 @@ xfer:       ghi   re                    ; save UART timing
             mov   rf,hskerr
             call  msg
             br    done
- 
+
 shake:      ldi   0aah
             call  type
 
 next:       call  read
             bz    over
             call  type
-            
+
             smi   1
             bz    cmd01
             mov   rf,cmderr
@@ -109,8 +112,12 @@ over:       call  read
 done:       ghi   r8                    ; restore previous echo setting
             phi   re
 
-            mark
-            sep   r1
+            call  inmsg
+            db    "done.",13,10,0
+
+            idl
+
+            .align page
 
 program:    mov   rc,rd                 ; calaculate last address in
             glo   rc                    ; 64-byte page
@@ -222,101 +229,6 @@ ret:        plo   re                    ; save d and set x to 2
             br    retbr                 ; jump back to continuation
 
             .align page
-
-            ; Initialize CDP1854 UART port and set RE to indicate UART in use.
-            ; This was written for the 1802/Mini but is generic to the 1854
-            ; since it doesn't access the extra control register that the
-            ; 1802/Mini has. This means it runs at whatever baud rate the
-            ; hardware has setup since there isn't any software control on
-setbd:      ; a generic 1854 implementation.
-
-          #ifdef UART_DETECT
-            BRMK  usebbang
-          #endif
- 
-          #if UART_GROUP
-            sex   r3
-            out   EXP_PORT              ; make sure default expander group
-            db    UART_GROUP
-            sex   r2
-          #endif
-
-            inp   UART_DATA
-            inp   UART_STATUS
-
-            inp   UART_STATUS
-            ani   2fh
-            bnz   usebbang
-
-            sex   r3
-            out   UART_STATUS
-            db    19h                   ; 8 data bits, 1 stop bit, no parity
-
-          #if UART_GROUP
-            out   EXP_PORT              ; make sure default expander group
-            db    NO_GROUP
-          #endif
-
-            mov   rc,utype              ; set UART I/O vectors
-            mov   rd,uread
-            lbr   setio
-
-usebbang:   lbr   btimalc
-
-          #ifdef SET_BAUD
-btimalc:    ldi   (FREQ_KHZ*5)/(SET_BAUD/25)-23
-          #else
-
-btimalc:    SEMK                      ; Make output in correct state
-
-timersrt:   ldi   0                   ; Wait to make sure the line is idle,
-timeidle:   smi   1                   ;  so we don't try to measure in the
-            nop                         ;  middle of a character, we need to
-            BRSP  timersrt            ;  get 256 consecutive loops without
-            bnz   timeidle            ;  input asserted before this exits
-
-timestrt:   BRMK  timestrt            ; Stall here until start bit begins
-
-            nop                         ; Burn a half a loop's time here so
-            ldi   1                   ;  that result rounds up if closer
-
-timecnt1:   phi   re                  ; Count up in units of 9 machine cycles
-timecnt2:   adi   1                   ;  per each loop, remembering the last
-            lbz   timedone            ;  time that input is asserted, the
-            BRSP  timecnt1            ;  very last of these will be just
-            br    timecnt2            ;  before the start of the stop bit
-
-timedone:   ldi   63                  ; Pre-load this value that we will 
-            plo   re                  ;  need in the calculations later
-
-            ghi   re                  ; Get timing loop value, subtract
-            smi   23                  ;  offset of 23 counts, if less than
-            bnf   timersrt            ;  this, then too low, go try again
-          #endif
-
-            bz    timegood            ; Fold both 23 and 24 into zero, this
-            smi   1                   ;  adj is needed for 9600 at 1.8 Mhz
-
-timegood:   phi   re                  ; Got a good measurement, save it
-
-            smi   63                  ; Subtract 63 from time, if less than
-            bnf   timekeep            ;  this, then keep the result as-is
-
-timedivd:   smi   3                   ; Otherwise, divide the excess part
-            inc   re                  ;  by three, adding to the 63 we saved
-            bdf   timedivd            ;  earlier so results are 64-126
-        
-            glo   re                  ; Get result of division plus 63
-            phi   re                  ;  and save over raw measurement
-
-timekeep:   ghi   re                  ; Get final result and shift left one
-            shl                         ;  bit to make room for echo flag, then
-            adi   2+1                 ;  add 1 to baud rate and set echo flag
-
-            phi   re                  ;  then store formatted result and
-
-            mov   rc,btype            ; Store bit-bang I/O vectors
-            mov   rd,bread
 
 #ifdef FAST_UART
   #if FREQ_KHZ == 4000
@@ -484,6 +396,103 @@ btyretn:    inc   r2
 
 #endif
 
+            .align page
+
+            ; Initialize CDP1854 UART port and set RE to indicate UART in use.
+            ; This was written for the 1802/Mini but is generic to the 1854
+            ; since it doesn't access the extra control register that the
+            ; 1802/Mini has. This means it runs at whatever baud rate the
+            ; hardware has setup since there isn't any software control on
+setbd:      ; a generic 1854 implementation.
+
+          #ifdef UART_DETECT
+            BRMK  usebbang
+          #endif
+
+          #if UART_GROUP
+            sex   r3
+            out   EXP_PORT              ; make sure default expander group
+            db    UART_GROUP
+            sex   r2
+          #endif
+
+            inp   UART_DATA
+            inp   UART_STATUS
+
+            inp   UART_STATUS
+            ani   2fh
+            bnz   usebbang
+
+            sex   r3
+            out   UART_STATUS
+            db    19h                   ; 8 data bits, 1 stop bit, no parity
+
+          #if UART_GROUP
+            out   EXP_PORT              ; make sure default expander group
+            db    NO_GROUP
+          #endif
+
+            mov   rc,utype              ; set UART I/O vectors
+            mov   rd,uread
+            lbr   setio
+
+usebbang:   lbr   btimalc
+
+          #ifdef SET_BAUD
+btimalc:    ldi   (FREQ_KHZ*5)/(SET_BAUD/25)-23
+          #else
+
+btimalc:    SEMK                      ; Make output in correct state
+
+timersrt:   ldi   0                   ; Wait to make sure the line is idle,
+timeidle:   smi   1                   ;  so we don't try to measure in the
+            nop                         ;  middle of a character, we need to
+            BRSP  timersrt            ;  get 256 consecutive loops without
+            bnz   timeidle            ;  input asserted before this exits
+
+timestrt:   BRMK  timestrt            ; Stall here until start bit begins
+
+            nop                         ; Burn a half a loop's time here so
+            ldi   1                   ;  that result rounds up if closer
+
+timecnt1:   phi   re                  ; Count up in units of 9 machine cycles
+timecnt2:   adi   1                   ;  per each loop, remembering the last
+            lbz   timedone            ;  time that input is asserted, the
+            BRSP  timecnt1            ;  very last of these will be just
+            br    timecnt2            ;  before the start of the stop bit
+
+timedone:   ldi   63                  ; Pre-load this value that we will
+            plo   re                  ;  need in the calculations later
+
+            ghi   re                  ; Get timing loop value, subtract
+            smi   23                  ;  offset of 23 counts, if less than
+            bnf   timersrt            ;  this, then too low, go try again
+          #endif
+
+            bz    timegood            ; Fold both 23 and 24 into zero, this
+            smi   1                   ;  adj is needed for 9600 at 1.8 Mhz
+
+timegood:   phi   re                  ; Got a good measurement, save it
+
+            smi   63                  ; Subtract 63 from time, if less than
+            bnf   timekeep            ;  this, then keep the result as-is
+
+timedivd:   smi   3                   ; Otherwise, divide the excess part
+            inc   re                  ;  by three, adding to the 63 we saved
+            bdf   timedivd            ;  earlier so results are 64-126
+
+            glo   re                  ; Get result of division plus 63
+            phi   re                  ;  and save over raw measurement
+
+timekeep:   ghi   re                  ; Get final result and shift left one
+            shl                         ;  bit to make room for echo flag, then
+            adi   2+1                 ;  add 1 to baud rate and set echo flag
+
+            phi   re                  ;  then store formatted result and
+
+            mov   rc,btype            ; Store bit-bang I/O vectors
+            mov   rd,bread
+
             ; Copy the type vector from rc and the read vector
             ; from rd to the low-RAM I/O vectors.
 setio:      mov   rf,type
@@ -577,7 +586,7 @@ hexout4:    ldi   hexout2.0
 hexout2:    ldi   hexoutr.0
             stxd
             glo   rd
- 
+
 hexout:     str   r2
             shr
             shr
